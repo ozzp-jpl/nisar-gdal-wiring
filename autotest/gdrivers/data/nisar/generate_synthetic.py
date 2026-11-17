@@ -24,8 +24,8 @@ import numpy as np
 EPOCH = "seconds since 2025-01-01T00:00:00"
 
 
-def _identification(f, product, level):
-    ident = f.create_group("/science/LSAR/identification")
+def _identification(f, product, level, inst="LSAR"):
+    ident = f.create_group(f"/science/{inst}/identification")
     ident.create_dataset("productType", data=np.bytes_(product))
     ident.create_dataset("productLevel", data=np.bytes_(level))
 
@@ -129,6 +129,56 @@ def rslc():
             c.create_dataset(name, data=data, chunks=(1, 3, 3), compression="gzip")
 
 
+def gcov_ssar():
+    """S-band L2 GCOV whose mask layers are not chunked, as in real products."""
+
+    nrows, ncols = 20, 30
+    grid = "/science/SSAR/GCOV/grids/frequencyA"
+
+    with h5py.File("NISAR_L2_GCOV_SSAR_synthetic.h5", "w", libver="earliest") as f:
+        _identification(f, "GCOV", "L2", inst="SSAR")
+
+        g = f.create_group(grid)
+        g.create_dataset("listOfCovarianceTerms", data=np.array([b"HHHH"]))
+        data = np.arange(nrows * ncols, dtype=np.float32)
+        g.create_dataset(
+            "HHHH", data=data.reshape(nrows, ncols), chunks=(10, 15), compression="gzip"
+        )
+        # Contiguous layout. 0 = invalid, 1..5 = valid sub-swath, 255 = fill
+        mask = np.ones((nrows, ncols), dtype=np.uint8)
+        mask[0:3, :] = 0
+        mask[:, 0:2] = 255
+        mask[10:, 15:] = 5
+        g.create_dataset("mask", data=mask)
+        # Compact layout (raw data stored in the object header)
+        dcpl = h5py.h5p.create(h5py.h5p.DATASET_CREATE)
+        dcpl.set_layout(h5py.h5d.COMPACT)
+        looks = (np.arange(nrows * ncols, dtype=np.uint16) * 3).reshape(nrows, ncols)
+        dset = h5py.h5d.create(
+            g.id,
+            b"numberOfLooks",
+            h5py.h5t.NATIVE_UINT16,
+            h5py.h5s.create_simple((nrows, ncols)),
+            dcpl=dcpl,
+        )
+        dset.write(h5py.h5s.ALL, h5py.h5s.ALL, looks)
+        g.create_dataset("xCoordinates", data=500010.0 + 20.0 * np.arange(ncols))
+        g.create_dataset("yCoordinates", data=3799990.0 - 20.0 * np.arange(nrows))
+        proj = g.create_dataset("projection", data=np.uint32(32611))
+        proj.attrs["epsg_code"] = np.uint32(32611)
+
+        # Contiguous 3-D metadata cube (height, y, x)
+        c = f.create_group("/science/SSAR/GCOV/metadata/radarGrid")
+        c.create_dataset("xCoordinates", data=499900.0 + 200.0 * np.arange(5))
+        c.create_dataset("yCoordinates", data=3800100.0 - 200.0 * np.arange(4))
+        c.create_dataset("heightAboveEllipsoid", data=np.array([0.0, 1000.0, 2000.0]))
+        proj = c.create_dataset("projection", data=np.uint32(32611))
+        proj.attrs["epsg_code"] = np.uint32(32611)
+        cube = 30.0 + 0.5 * np.arange(3 * 4 * 5, dtype=np.float32)
+        c.create_dataset("incidenceAngle", data=cube.reshape(3, 4, 5))
+
+
 if __name__ == "__main__":
     gcov()
     rslc()
+    gcov_ssar()
