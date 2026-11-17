@@ -122,6 +122,30 @@ def test_nisar_open_prefixed_without_extension(tmp_path):
     assert ds.GetRasterBand(1).Checksum() == CHECKSUM["HHHH"]
 
 
+@pytest.mark.parametrize("name", ["granule.hdf5", "granule"])
+@pytest.mark.parametrize("path", [f"{GRID}/HHHH", f"{GRID[1:]}/HHHH"])
+def test_nisar_connection_string_any_extension(tmp_path, name, path):
+
+    # Unquoted NISAR:filename:hdf5_path, whatever the file extension and
+    # with an absolute or relative HDF5 path
+    filename = str(tmp_path / name)
+    shutil.copy(GCOV, filename)
+
+    ds = gdal.Open(f"NISAR:{filename}:{path}")
+    assert ds.RasterCount == 1
+    assert ds.GetRasterBand(1).Checksum() == CHECKSUM["HHHH"]
+
+    ds = gdal.Open(f"NISAR:{filename}")
+    assert len(ds.GetSubDatasets()) == 4
+
+
+def test_nisar_connection_string_drive_letter():
+
+    # The colon of a Windows drive letter is not the subdataset separator
+    with gdal.quiet_errors(), pytest.raises(Exception, match="X:/nisar_missing.h5"):
+        gdal.Open("NISAR:X:/nisar_missing.h5")
+
+
 ###############################################################################
 # Container open: no bands, subdataset inventory, metadata domains.
 
@@ -432,6 +456,33 @@ def test_nisar_vsicurl(server):
         assert ds.GetRasterBand(1).Checksum() == RSLC_CHECKSUM["HH"]
         assert ds.GetGCPCount() == 9
         ds = None
+
+        # Unquoted names: the port colon is not the subdataset separator
+        ds = gdal.Open(f"NISAR:{filename}")
+        assert len(ds.GetSubDatasets()) == 4
+        ds = None
+
+        for path in (f"{GRID}/HVHV", f"{GRID[1:]}/HVHV"):
+            ds = gdal.Open(f"NISAR:{filename}:{path}")
+            assert ds.GetRasterBand(1).Checksum() == CHECKSUM["HVHV"]
+            ds = None
+
+        # Same parsing in metadata-cube interpolation mode
+        dem = _create_dem(
+            "/vsimem/nisar_vsicurl_dem.tif",
+            EPSG,
+            (499000, 100, 0, 3801000, 0, -100),
+            0.0,
+        )
+        ds = gdal.OpenEx(
+            f"NISAR:{filename}",
+            open_options=["QUANTITY=incidenceAngle", f"DEM_FILE={dem}"],
+        )
+        assert (ds.RasterXSize, ds.RasterYSize) == (NCOLS, NROWS)
+        assert ds.GetMetadataItem("NISAR_REFERENCE_GRID") == f"{GRID}/HHHH"
+        assert ds.GetRasterBand(1).Checksum() != 0
+        ds = None
+        gdal.Unlink(dem)
 
     # Release the HTTP connection kept alive by /vsicurl/
     gdal.VSICurlClearCache()
