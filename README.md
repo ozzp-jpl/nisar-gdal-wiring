@@ -22,6 +22,13 @@ driver sources (`frmts/nisar/*.cpp`, `*.h`) are intentionally left out. They are
   post-image `index` lines, and the base blobs match `d6cd7744`.
 - `frmts/nisar/CMakeLists.txt` is byte-identical to the plugin repo's
   `frmts/nisar/CMakeLists.gdal.txt`.
+- Changed since that commit, together with the plugin's upstream-checklist work (VSI
+  `Identify()`, HDF5 global lock, `NISAR_EXPORT_ZARR_DIR`, `nisar_version.h`), so their blob
+  hashes no longer match the patch: `autotest/gdrivers/nisar.py`,
+  `autotest/gdrivers/data/nisar/*`, `doc/source/drivers/raster/nisar.rst` and
+  `frmts/nisar/CMakeLists.txt`. Verified by copying this tree and the plugin's `frmts/nisar/`
+  sources over a checkout of the base commit: builtin build, `autotest/gdrivers/nisar.py`
+  47 passed, 11 skipped (run-on-demand real-granule tests).
 
 ## What each file contributes
 
@@ -36,7 +43,9 @@ driver sources (`frmts/nisar/*.cpp`, `*.h`) are intentionally left out. They are
 | `doc/source/drivers/raster/index.rst` | line 133: `nisar` toctree entry |
 | `doc/source/spelling_wordlist.txt` | lines 555-556 `dataspace`, `dataspaces`; line 1539 `Kerchunk` |
 | `autotest/gdrivers/nisar.py` | new: autotest (`require_driver("NISAR")`) |
-| `autotest/gdrivers/data/nisar/NISAR_L2_GCOV_synthetic.h5` | new: 19 000-byte static fixture used by `nisar.py` |
+| `autotest/gdrivers/data/nisar/NISAR_L2_GCOV_synthetic.h5` | new: 28 544-byte static fixture used by `nisar.py` (L2 GCOV-like: two Float32 layers, mask, `radarGrid` incidence-angle cube) |
+| `autotest/gdrivers/data/nisar/NISAR_L1_RSLC_synthetic.h5` | new: 32 776-byte static fixture used by `nisar.py` (L1 RSLC-like: two CFloat32 swaths, `geolocationGrid` with GCP coordinates and incidence-angle cube) |
+| `autotest/gdrivers/data/nisar/generate_synthetic.py` | new: h5py + numpy script that writes the two fixtures (not run by the tests) |
 
 Line numbers refer to the files in this tree. Nothing here has been proposed upstream; see
 `UPSTREAM_CHECKLIST.md` for the open policy, licensing and review items.

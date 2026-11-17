@@ -255,21 +255,29 @@ The following configuration options are available:
 
       Longest string printed in ``NISAR_DUMP`` before truncation.
 
+-  .. config:: NISAR_EXPORT_ZARR_DIR
+
+      Existing directory in which to write a Kerchunk JSON file
+      (``nisar_kerchunk_<HDF5 path>.json``) describing the HDF5 chunks of each
+      opened raster. Nothing is written when this option is not set.
+
 -  .. config:: NISAR_EXPORT_ZARR
       :choices: YES, NO
-      :default: NO
 
-      Whether to write a Kerchunk JSON file describing the HDF5 chunks of the
-      opened raster.
+      Whether to write the Kerchunk JSON file. Defaults to YES when
+      :config:`NISAR_EXPORT_ZARR_DIR` is set, and has no effect otherwise.
 
 :config:`GDAL_NUM_THREADS` sets the number of threads that decompress chunks.
 
 Remote access
 -------------
 
-The driver supports :ref:`virtual_file_systems`. For ``/vsicurl/``,
-``/vsis3/`` and other ``/vsi`` network file systems, HDF5 I/O goes through a
-virtual file driver backed by GDAL's VSI API, not the HDF5 ROS3 driver.
+The driver supports :ref:`virtual_file_systems`. For any ``/vsi`` path
+(``/vsicurl/``, ``/vsis3/``, ``/vsimem/``, ``/vsizip/``, ...), HDF5 I/O goes
+through a virtual file driver backed by GDAL's VSI API, not the HDF5 ROS3
+driver. Files on network file systems are identified from their name (which
+must contain ``NISAR``) to avoid extra requests; other files are identified
+from their content.
 GDAL's usual HTTP caching, retries (:config:`GDAL_HTTP_MAX_RETRY`) and
 credentials (``AWS_*``) apply. ``s3://bucket/key`` is rewritten to
 ``/vsis3/bucket/key``, and ``http(s)://...`` to ``/vsicurl/http(s)://...``.
