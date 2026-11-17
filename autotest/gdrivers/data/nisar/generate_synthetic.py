@@ -25,9 +25,15 @@ EPOCH = "seconds since 2025-01-01T00:00:00"
 
 
 def _identification(f, product, level, inst="LSAR"):
+    f.attrs["mission_name"] = np.bytes_("NISAR")
     ident = f.create_group(f"/science/{inst}/identification")
     ident.create_dataset("productType", data=np.bytes_(product))
     ident.create_dataset("productLevel", data=np.bytes_(level))
+
+
+def _grid_mapping(dset):
+    # As in real products; GDAL's HDF5 driver finds the SRS through it
+    dset.attrs["grid_mapping"] = np.bytes_("projection")
 
 
 def gcov():
@@ -45,18 +51,22 @@ def gcov():
         g.create_dataset("listOfCovarianceTerms", data=np.array([b"HHHH", b"HVHV"]))
         for name, scale in (("HHHH", 1), ("HVHV", 2)):
             data = np.arange(nrows * ncols, dtype=np.float32) * scale
-            g.create_dataset(
-                name,
-                data=data.reshape(nrows, ncols),
-                chunks=(10, 15),
-                compression="gzip",
+            _grid_mapping(
+                g.create_dataset(
+                    name,
+                    data=data.reshape(nrows, ncols),
+                    chunks=(10, 15),
+                    compression="gzip",
+                )
             )
         # 0 = invalid, 1..5 = valid sub-swath number, 255 = fill
         mask = np.ones((nrows, ncols), dtype=np.uint8)
         mask[0:3, :] = 0
         mask[:, 0:2] = 255
         mask[10:, 15:] = 5
-        g.create_dataset("mask", data=mask, chunks=(10, 15), compression="gzip")
+        m = g.create_dataset("mask", data=mask, chunks=(10, 15), compression="gzip")
+        m.attrs["_FillValue"] = np.uint8(255)
+        _grid_mapping(m)
         g.create_dataset("xCoordinates", data=x0 + dx * np.arange(ncols))
         g.create_dataset("yCoordinates", data=y0 + dy * np.arange(nrows))
         proj = g.create_dataset("projection", data=np.uint32(32611))
@@ -141,15 +151,22 @@ def gcov_ssar():
         g = f.create_group(grid)
         g.create_dataset("listOfCovarianceTerms", data=np.array([b"HHHH"]))
         data = np.arange(nrows * ncols, dtype=np.float32)
-        g.create_dataset(
-            "HHHH", data=data.reshape(nrows, ncols), chunks=(10, 15), compression="gzip"
+        _grid_mapping(
+            g.create_dataset(
+                "HHHH",
+                data=data.reshape(nrows, ncols),
+                chunks=(10, 15),
+                compression="gzip",
+            )
         )
         # Contiguous layout. 0 = invalid, 1..5 = valid sub-swath, 255 = fill
         mask = np.ones((nrows, ncols), dtype=np.uint8)
         mask[0:3, :] = 0
         mask[:, 0:2] = 255
         mask[10:, 15:] = 5
-        g.create_dataset("mask", data=mask)
+        m = g.create_dataset("mask", data=mask)
+        m.attrs["_FillValue"] = np.uint8(255)
+        _grid_mapping(m)
         # Compact layout (raw data stored in the object header)
         dcpl = h5py.h5p.create(h5py.h5p.DATASET_CREATE)
         dcpl.set_layout(h5py.h5d.COMPACT)
@@ -162,6 +179,7 @@ def gcov_ssar():
             dcpl=dcpl,
         )
         dset.write(h5py.h5s.ALL, h5py.h5s.ALL, looks)
+        _grid_mapping(g["numberOfLooks"])
         g.create_dataset("xCoordinates", data=500010.0 + 20.0 * np.arange(ncols))
         g.create_dataset("yCoordinates", data=3799990.0 - 20.0 * np.arange(nrows))
         proj = g.create_dataset("projection", data=np.uint32(32611))

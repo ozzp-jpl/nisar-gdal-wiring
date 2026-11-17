@@ -374,6 +374,72 @@ def test_nisar_compact_layout():
 
 
 ###############################################################################
+# Files of the HDF5 driver tests that carry mission_name=NISAR but not the
+# /science/<instrument> layout: they stay with the HDF5 driver, and their
+# (contiguous) raster reads the same through an explicit NISAR: name
+
+
+@pytest.mark.require_driver("HDF5")
+@pytest.mark.parametrize(
+    "filename,epsg",
+    [
+        # epsg_code is a string in this file: no SRS is expected from it
+        ("data/hdf5/fake_NISAR_L2_epsg_code.h5", None),
+        ("data/hdf5/fake_NISAR_L2_spatial_ref.h5", "32611"),
+    ],
+)
+def test_nisar_hdf5_driver_test_files(filename, epsg):
+
+    assert gdal.IdentifyDriverEx(filename, allowed_drivers=["NISAR"]) is None
+    assert gdal.IdentifyDriver(filename).ShortName == "HDF5"
+
+    with gdal.quiet_errors():
+        ds = gdal.Open(f'NISAR:"{filename}":/some_group/test')
+        assert ds.GetDriver().ShortName == "NISAR"
+        assert (ds.RasterXSize, ds.RasterYSize) == (4, 5)
+        band = ds.GetRasterBand(1)
+        assert band.DataType == gdal.GDT_Byte
+        assert band.ReadRaster() == bytes(range(20))
+        if epsg:
+            assert ds.GetSpatialRef().GetAuthorityCode(None) == epsg
+
+
+###############################################################################
+# The HDF5 driver georeferences NISAR L2 rasters too: both drivers must agree
+
+
+@pytest.mark.require_driver("HDF5")
+@pytest.mark.parametrize(
+    "filename,path",
+    [
+        (GCOV, f"{GRID}/HHHH"),
+        (GCOV, f"{GRID}/mask"),
+        (GCOV_SSAR, f"{SSAR_GRID}/HHHH"),
+        (GCOV_SSAR, f"{SSAR_GRID}/mask"),
+        (GCOV_SSAR, f"{SSAR_GRID}/numberOfLooks"),
+    ],
+)
+def test_nisar_same_as_hdf5_driver(filename, path):
+
+    ds = gdal.Open(f'NISAR:"{filename}":{path}')
+    ref_ds = gdal.Open(f'HDF5:"{filename}":/{path}')
+    assert ref_ds.GetDriver().ShortName == "HDF5Image"
+
+    assert (ds.RasterXSize, ds.RasterYSize) == (NCOLS, NROWS)
+    assert (ref_ds.RasterXSize, ref_ds.RasterYSize) == (NCOLS, NROWS)
+    assert ds.GetGeoTransform() == pytest.approx(ref_ds.GetGeoTransform())
+    assert ds.GetGeoTransform() == pytest.approx(
+        (X0 - DX / 2, DX, 0, Y0 - DY / 2, 0, DY)
+    )
+    assert ds.GetSpatialRef().IsSame(ref_ds.GetSpatialRef())
+
+    band, ref_band = ds.GetRasterBand(1), ref_ds.GetRasterBand(1)
+    assert band.DataType == ref_band.DataType
+    assert band.GetNoDataValue() == ref_band.GetNoDataValue()
+    assert band.ReadRaster() == ref_band.ReadRaster()
+
+
+###############################################################################
 # Read-only driver
 
 
