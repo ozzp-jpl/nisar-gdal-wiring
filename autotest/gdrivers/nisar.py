@@ -35,6 +35,9 @@ pytestmark = pytest.mark.require_driver("NISAR")
 #   covariance terms, a mask and a metadata/radarGrid incidenceAngle cube.
 # - NISAR_L1_RSLC_synthetic.h5: L1 RSLC-like product with two CFloat32 swaths
 #   and a metadata/geolocationGrid (GCPs + incidenceAngle cube).
+# - NISAR_L2_GCOV_SSAR_synthetic.h5: S-band (/science/SSAR) L2 GCOV-like
+#   product whose mask and radarGrid cube are contiguous and numberOfLooks
+#   compact (not chunked).
 #
 # Tests that need real granules are marked require_run_on_demand + slow and
 # fetch them from OSGeo/gdal-test-datasets (see REAL_GRANULES below).
@@ -54,6 +57,10 @@ SWATH = "/science/LSAR/RSLC/swaths/frequencyA"
 RSLC_CUBE = "/science/LSAR/RSLC/metadata/geolocationGrid"
 NLINES, NPIXELS = 24, 32
 RSLC_CHECKSUM = {"HH": 14384}
+
+GCOV_SSAR = "data/nisar/NISAR_L2_GCOV_SSAR_synthetic.h5"
+SSAR_GRID = "/science/SSAR/GCOV/grids/frequencyA"
+SSAR_CUBE = "/science/SSAR/GCOV/metadata/radarGrid"
 
 # Real granules, to be hosted in OSGeo/gdal-test-datasets (not yet uploaded:
 # file names and expected values are to be filled in when they are).
@@ -288,6 +295,148 @@ def test_nisar_open_options_invalid(options, message):
 
     with pytest.raises(Exception, match=message):
         gdal.OpenEx(GCOV, allowed_drivers=["NISAR"], open_options=options)
+
+
+###############################################################################
+# S-band products, and layers that are not chunked
+
+
+def test_nisar_ssar_subdatasets():
+
+    ds = gdal.Open(GCOV_SSAR)
+    assert ds.GetDriver().ShortName == "NISAR"
+    names = [name for name, _ in ds.GetSubDatasets()]
+    assert names == [
+        f'NISAR:"{GCOV_SSAR}":{SSAR_GRID}/{layer}'
+        for layer in ("HHHH", "mask", "numberOfLooks")
+    ] + [f'NISAR:"{GCOV_SSAR}":{SSAR_CUBE}/incidenceAngle']
+
+
+@pytest.mark.parametrize("options", [["FREQ=A"], ["POL=HHHH"], ["INST=SSAR"]])
+def test_nisar_ssar_open_options(options):
+
+    # INST defaults to the instrument of the granule
+    ds = gdal.OpenEx(GCOV_SSAR, allowed_drivers=["NISAR"], open_options=options)
+    assert ds.GetMetadataItem("HDF5_PATH") == f"{SSAR_GRID}/HHHH"
+    assert ds.GetRasterBand(1).ReadRaster() == _expected_data(1)
+
+    with pytest.raises(Exception, match="polarization list"):
+        gdal.OpenEx(GCOV_SSAR, allowed_drivers=["NISAR"], open_options=["INST=LSAR"])
+
+
+def test_nisar_contiguous_layout():
+
+    # 0 = invalid, 1 and 5 = valid sub-swaths, 255 = fill
+    expected = bytes(
+        255 if x < 2 else 0 if y < 3 else 5 if (y >= 10 and x >= 15) else 1
+        for y in range(NROWS)
+        for x in range(NCOLS)
+    )
+    ds = gdal.Open(f'NISAR:"{GCOV_SSAR}":{SSAR_GRID}/mask')
+    band = ds.GetRasterBand(1)
+    assert band.DataType == gdal.GDT_Byte
+    assert band.GetBlockSize() == [NCOLS, 1]
+    assert band.ReadRaster() == expected
+    assert band.ReadRaster(1, 2, 20, 9) == bytes(
+        expected[y * NCOLS + x] for y in range(2, 11) for x in range(1, 21)
+    )
+
+    # Same layer as the mask band of a chunked raster
+    ds = gdal.OpenEx(f'NISAR:"{GCOV_SSAR}":{SSAR_GRID}/HHHH', open_options=["MASK=YES"])
+    assert ds.GetRasterBand(1).GetMaskBand().ReadRaster() == bytes(
+        255 if 1 <= v <= 5 else 0 for v in expected
+    )
+
+
+def test_nisar_contiguous_layout_3d():
+
+    # One band per height layer
+    ds = gdal.Open(f'NISAR:"{GCOV_SSAR}":{SSAR_CUBE}/incidenceAngle')
+    assert (ds.RasterCount, ds.RasterXSize, ds.RasterYSize) == (3, 5, 4)
+    for i in range(3):
+        assert (
+            ds.GetRasterBand(i + 1).ReadRaster()
+            == array.array(
+                "f", [30.0 + 0.5 * (20 * i + j) for j in range(20)]
+            ).tobytes()
+        )
+
+
+def test_nisar_compact_layout():
+
+    ds = gdal.Open(f'NISAR:"{GCOV_SSAR}":{SSAR_GRID}/numberOfLooks')
+    band = ds.GetRasterBand(1)
+    assert band.DataType == gdal.GDT_UInt16
+    assert (
+        band.ReadRaster()
+        == array.array("H", [3 * i for i in range(NROWS * NCOLS)]).tobytes()
+    )
+
+
+###############################################################################
+# Files of the HDF5 driver tests that carry mission_name=NISAR but not the
+# /science/<instrument> layout: they stay with the HDF5 driver, and their
+# (contiguous) raster reads the same through an explicit NISAR: name
+
+
+@pytest.mark.require_driver("HDF5")
+@pytest.mark.parametrize(
+    "filename,epsg",
+    [
+        # epsg_code is a string in this file: no SRS is expected from it
+        ("data/hdf5/fake_NISAR_L2_epsg_code.h5", None),
+        ("data/hdf5/fake_NISAR_L2_spatial_ref.h5", "32611"),
+    ],
+)
+def test_nisar_hdf5_driver_test_files(filename, epsg):
+
+    assert gdal.IdentifyDriverEx(filename, allowed_drivers=["NISAR"]) is None
+    assert gdal.IdentifyDriver(filename).ShortName == "HDF5"
+
+    with gdal.quiet_errors():
+        ds = gdal.Open(f'NISAR:"{filename}":/some_group/test')
+        assert ds.GetDriver().ShortName == "NISAR"
+        assert (ds.RasterXSize, ds.RasterYSize) == (4, 5)
+        band = ds.GetRasterBand(1)
+        assert band.DataType == gdal.GDT_Byte
+        assert band.ReadRaster() == bytes(range(20))
+        if epsg:
+            assert ds.GetSpatialRef().GetAuthorityCode(None) == epsg
+
+
+###############################################################################
+# The HDF5 driver georeferences NISAR L2 rasters too: both drivers must agree
+
+
+@pytest.mark.require_driver("HDF5")
+@pytest.mark.parametrize(
+    "filename,path",
+    [
+        (GCOV, f"{GRID}/HHHH"),
+        (GCOV, f"{GRID}/mask"),
+        (GCOV_SSAR, f"{SSAR_GRID}/HHHH"),
+        (GCOV_SSAR, f"{SSAR_GRID}/mask"),
+        (GCOV_SSAR, f"{SSAR_GRID}/numberOfLooks"),
+    ],
+)
+def test_nisar_same_as_hdf5_driver(filename, path):
+
+    ds = gdal.Open(f'NISAR:"{filename}":{path}')
+    ref_ds = gdal.Open(f'HDF5:"{filename}":/{path}')
+    assert ref_ds.GetDriver().ShortName == "HDF5Image"
+
+    assert (ds.RasterXSize, ds.RasterYSize) == (NCOLS, NROWS)
+    assert (ref_ds.RasterXSize, ref_ds.RasterYSize) == (NCOLS, NROWS)
+    assert ds.GetGeoTransform() == pytest.approx(ref_ds.GetGeoTransform())
+    assert ds.GetGeoTransform() == pytest.approx(
+        (X0 - DX / 2, DX, 0, Y0 - DY / 2, 0, DY)
+    )
+    assert ds.GetSpatialRef().IsSame(ref_ds.GetSpatialRef())
+
+    band, ref_band = ds.GetRasterBand(1), ref_ds.GetRasterBand(1)
+    assert band.DataType == ref_band.DataType
+    assert band.GetNoDataValue() == ref_band.GetNoDataValue()
+    assert band.ReadRaster() == ref_band.ReadRaster()
 
 
 ###############################################################################

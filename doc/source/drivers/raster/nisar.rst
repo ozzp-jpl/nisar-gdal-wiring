@@ -140,9 +140,9 @@ The following open options are available:
 
 -  .. oo:: INST
       :choices: LSAR, SSAR
-      :default: LSAR
 
       Instrument to open when the connection string has no HDF5 path.
+      Defaults to the instrument of the file (``LSAR`` if it has both).
 
 -  .. oo:: FREQ
       :choices: A, B
